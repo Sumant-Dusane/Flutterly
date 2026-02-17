@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flutter + Claude Code</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    display: flex;
+    width: 100vw;
+    height: 100vh;
+    background: #1a1a1a;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  #left, #right {
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+  }
+
+  #left { width: 50%; }
+  #right { width: calc(50% - 4px); }
+
+  #divider {
+    width: 4px;
+    height: 100%;
+    background: #333;
+    cursor: col-resize;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+
+  #divider:hover, #divider.dragging {
+    background: #555;
+  }
+
+  iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+  }
+
+  #flutter-overlay {
+    position: absolute;
+    inset: 0;
+    background: #1a1a1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+    font-size: 14px;
+    z-index: 10;
+  }
+
+  #flutter-overlay .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #444;
+    border-top-color: #888;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 10px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Modal */
+  #modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #modal-backdrop.visible {
+    display: flex;
+  }
+
+  #modal {
+    background: #242424;
+    border: 1px solid #383838;
+    border-radius: 8px;
+    padding: 28px 32px;
+    width: 380px;
+    max-width: calc(100vw - 32px);
+  }
+
+  #modal h2 {
+    color: #e0e0e0;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  #modal p {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+
+  #modal label {
+    display: block;
+    color: #aaa;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+
+  #token-input {
+    width: 100%;
+    background: #1a1a1a;
+    border: 1px solid #383838;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 13px;
+    padding: 8px 10px;
+    outline: none;
+    margin-bottom: 16px;
+  }
+
+  #token-input:focus {
+    border-color: #555;
+  }
+
+  #modal-submit {
+    width: 100%;
+    background: #3d7eff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 9px;
+    cursor: pointer;
+  }
+
+  #modal-submit:hover { background: #2f6fe0; }
+  #modal-submit:disabled { background: #2a4a80; cursor: default; }
+
+  #modal-error {
+    color: #e05050;
+    font-size: 12px;
+    margin-top: 10px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="left">
+  <iframe id="terminal-frame" src="/terminal/" title="Claude Code Terminal"></iframe>
+</div>
+
+<div id="divider"></div>
+
+<div id="right">
+  <iframe id="preview-frame" src="/preview/" title="Flutter Preview"></iframe>
+  <div id="flutter-overlay">
+    <div class="spinner"></div>
+    Starting Flutter...
+  </div>
+</div>
+
+<!-- Auth modal -->
+<div id="modal-backdrop">
+  <div id="modal">
+    <h2>Configure AWS Bedrock</h2>
+    <p>Enter your AWS Bearer Token to enable Claude Code access.</p>
+    <label for="token-input">AWS Bearer Token</label>
+    <input id="token-input" type="password" placeholder="Paste your token here" autocomplete="off">
+    <button id="modal-submit">Save &amp; Continue</button>
+    <div id="modal-error"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // --- Draggable divider ---
+  const divider = document.getElementById('divider');
+  const left = document.getElementById('left');
+  const right = document.getElementById('right');
+
+  let dragging = false;
+  let startX = 0;
+  let startLeftW = 0;
+
+  divider.addEventListener('mousedown', function (e) {
+    dragging = true;
+    startX = e.clientX;
+    startLeftW = left.getBoundingClientRect().width;
+    divider.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    if (!dragging) return;
+    const totalW = document.body.clientWidth - 4; // minus divider
+    const delta = e.clientX - startX;
+    let newLeft = startLeftW + delta;
+    newLeft = Math.max(totalW * 0.15, Math.min(totalW * 0.85, newLeft));
+    const newRight = totalW - newLeft;
+    left.style.width = newLeft + 'px';
+    right.style.width = newRight + 'px';
+  });
+
+  document.addEventListener('mouseup', function () {
+    if (!dragging) return;
+    dragging = false;
+    divider.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+  });
+
+  // --- Flutter polling ---
+  const overlay = document.getElementById('flutter-overlay');
+
+  const pollFlutter = setInterval(function () {
+    fetch('/preview/', { method: 'GET' })
+      .then(function (res) {
+        if (res.ok) {
+          clearInterval(pollFlutter);
+          overlay.style.display = 'none';
+        }
+      })
+      .catch(function () { /* keep polling */ });
+  }, 2000);
+
+  // --- Auth flow ---
+  const backdrop = document.getElementById('modal-backdrop');
+  const submitBtn = document.getElementById('modal-submit');
+  const tokenInput = document.getElementById('token-input');
+  const modalError = document.getElementById('modal-error');
+
+  function showModal() {
+    backdrop.classList.add('visible');
+    tokenInput.focus();
+  }
+
+  function hideModal() {
+    backdrop.classList.remove('visible');
+  }
+
+  function showError(msg) {
+    modalError.textContent = msg;
+    modalError.style.display = 'block';
+  }
+
+  function clearError() {
+    modalError.style.display = 'none';
+    modalError.textContent = '';
+  }
+
+  fetch('/check-bedrock')
+    .then(function (res) { return res.text(); })
+    .then(function (text) {
+      if (text.trim() === 'not-configured') {
+        showModal();
+      }
+    })
+    .catch(function () {
+      // If check fails, show modal to be safe
+      showModal();
+    });
+
+  submitBtn.addEventListener('click', function () {
+    const token = tokenInput.value.trim();
+    if (!token) {
+      showError('Please enter a token.');
+      return;
+    }
+    clearError();
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving...';
+
+    fetch('/configure-bedrock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token })
+    })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.ok) {
+          hideModal();
+        } else {
+          showError(data.error || 'Failed to save token.');
+        }
+      })
+      .catch(function () {
+        showError('Network error. Please try again.');
+      })
+      .finally(function () {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save & Continue';
+      });
+  });
+
+  tokenInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') submitBtn.click();
+  });
+}());
+</script>
+
+</body>
+</html>

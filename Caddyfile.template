@@ -1,0 +1,30 @@
+{{DOMAIN}} {
+
+    # Static files + config API (Node server)
+    handle / {
+        reverse_proxy localhost:7600
+    }
+
+    handle /check-bedrock {
+        reverse_proxy localhost:7600
+    }
+
+    handle /configure-bedrock {
+        reverse_proxy localhost:7600
+    }
+
+    # ttyd web terminal (WebSocket)
+    handle /terminal/* {
+        uri strip_prefix /terminal
+        reverse_proxy localhost:7681 {
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
+        }
+    }
+
+    # Flutter web preview
+    handle /preview/* {
+        uri strip_prefix /preview
+        reverse_proxy localhost:8080
+    }
+}
