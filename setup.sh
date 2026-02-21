@@ -45,6 +45,16 @@ echo "App directory:   $SCRIPT_DIR"
 mkdir -p "$LOCAL_BIN"
 export PATH="$LOCAL_BIN:$PATH"
 
+# Persist ~/.local/bin in PATH across shell sessions
+for RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [ -f "$RC" ] && ! grep -q 'LOCAL_BIN\|\.local/bin' "$RC"; then
+        echo '' >> "$RC"
+        echo '# Added by flutterly setup' >> "$RC"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
+        echo "Added ~/.local/bin to PATH in $RC"
+    fi
+done
+
 # ---------------------------------------------------------------------------
 # 2. Install ttyd
 # ---------------------------------------------------------------------------
