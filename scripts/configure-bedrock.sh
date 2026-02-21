@@ -8,17 +8,17 @@ if [ -z "$TOKEN" ]; then
     exit 1
 fi
 
-ZSHRC="$HOME/.zshrc"
+BASHRC="$HOME/.bashrc"
 
-touch "$ZSHRC"
+touch "$BASHRC"
 
 # Remove any existing Bedrock-related lines
-sed -i '/CLAUDE_CODE_USE_BEDROCK/d' "$ZSHRC"
-sed -i '/AWS_REGION/d' "$ZSHRC"
-sed -i '/AWS_BEARER_TOKEN_BEDROCK/d' "$ZSHRC"
+sed -i '/CLAUDE_CODE_USE_BEDROCK/d' "$BASHRC"
+sed -i '/AWS_REGION/d' "$BASHRC"
+sed -i '/AWS_BEARER_TOKEN_BEDROCK/d' "$BASHRC"
 
 # Append new config
-cat >> "$ZSHRC" <<EOF
+cat >> "$BASHRC" <<EOF
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION=us-east-1
 export AWS_BEARER_TOKEN_BEDROCK=${TOKEN}

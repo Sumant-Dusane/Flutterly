@@ -1,179 +1,125 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: bash setup.sh <domain> <flutter-project-path> [--https]
-# No root/sudo required — installs binaries to ~/.local/bin and services to ~/.config/systemd/user/
+# ============================================================
+# Flutterly Setup
 #
-# --https   Enable HTTPS via Caddy's internal CA on port 8443 (self-signed).
-#           Browser will warn on first visit; add an exception to proceed.
+# Run on a fresh Ubuntu 22.04+ VM with a public IP and
+# a domain name pointing to it (for automatic HTTPS).
+#
+# Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>
+# Example: sudo bash setup.sh myapp.example.com mysecretpass /home/user/myapp
+# ============================================================
 
-# ---------------------------------------------------------------------------
-# 1. Validate inputs
-# ---------------------------------------------------------------------------
+DOMAIN="${1:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
+PASSWORD="${2:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
+FLUTTER_PROJECT="${3:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
+USERNAME="claude"
+NTFY_TOPIC="flutterly-$(openssl rand -hex 4)"
 
-if [ $# -lt 2 ]; then
-    echo "Usage: bash setup.sh <domain> <flutter-project-path> [--https]" >&2
-    exit 1
-fi
-
-DOMAIN="$1"
-FLUTTER_PROJECT="$2"
-ENABLE_HTTPS=false
-for arg in "$@"; do
-    [ "$arg" = "--https" ] && ENABLE_HTTPS=true
-done
-
-if ! which flutter &>/dev/null; then
-    echo "Error: flutter is not installed or not on PATH" >&2
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ ! -d "$FLUTTER_PROJECT" ]; then
     echo "Error: Flutter project directory '$FLUTTER_PROJECT' not found" >&2
     exit 1
 fi
+FLUTTER_PROJECT="$(realpath "$FLUTTER_PROJECT")"
 
-if ! which node &>/dev/null; then
-    echo "Error: Node.js is not installed or not on PATH" >&2
-    echo "  Install via nvm: https://github.com/nvm-sh/nvm" >&2
+echo "==> Installing system dependencies..."
+apt-get update -qq
+apt-get install -y curl git jq openssl
+
+# Install Node.js
+if ! command -v node &>/dev/null; then
+    echo "==> Installing Node.js 20..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+fi
+
+# Install Claude Code
+if ! command -v claude &>/dev/null; then
+    echo "==> Installing Claude Code..."
+    npm install -g @anthropic-ai/claude-code
+fi
+
+# Validate Flutter
+if ! command -v flutter &>/dev/null; then
+    echo "Error: flutter is not installed or not on PATH" >&2
+    echo "  Install Flutter SDK first: https://docs.flutter.dev/get-started/install/linux" >&2
     exit 1
 fi
-
-FLUTTER_PROJECT="$(realpath "$FLUTTER_PROJECT")"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLUTTER_BIN="$(which flutter)"
 NODE_BIN="$(which node)"
-LOCAL_BIN="$HOME/.local/bin"
 
-if $ENABLE_HTTPS; then
-    SCHEME="https"
-    PORT="8443"
-    TLS_DIRECTIVE="    tls internal"
-else
-    SCHEME="http"
-    PORT="7800"
-    TLS_DIRECTIVE=""
-fi
-
-echo "Domain:          $DOMAIN"
-echo "Flutter project: $FLUTTER_PROJECT"
-echo "App directory:   $SCRIPT_DIR"
-echo "HTTPS:           $ENABLE_HTTPS (${SCHEME}://${DOMAIN}:${PORT}/)"
-
-mkdir -p "$LOCAL_BIN"
-export PATH="$LOCAL_BIN:$PATH"
-
-# Persist ~/.local/bin in PATH across shell sessions
-for RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ -f "$RC" ] && ! grep -q 'LOCAL_BIN\|\.local/bin' "$RC"; then
-        echo '' >> "$RC"
-        echo '# Added by flutterly setup' >> "$RC"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
-        echo "Added ~/.local/bin to PATH in $RC"
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# 2. Install ttyd
-# ---------------------------------------------------------------------------
-
-if ! which ttyd &>/dev/null; then
-    echo "Installing ttyd to $LOCAL_BIN..."
+# Install ttyd
+if ! command -v ttyd &>/dev/null; then
+    echo "==> Installing ttyd..."
+    TTYD_VERSION="1.7.7"
     ARCH="$(uname -m)"
     case "$ARCH" in
         x86_64)  TTYD_ARCH="x86_64" ;;
         aarch64) TTYD_ARCH="aarch64" ;;
-        *)
-            echo "Error: unsupported architecture: $ARCH" >&2
-            exit 1
-            ;;
+        *) echo "Error: unsupported architecture: $ARCH" >&2; exit 1 ;;
     esac
-    TTYD_VERSION="1.7.7"
-    TTYD_URL="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${TTYD_ARCH}"
-    curl -fsSL "$TTYD_URL" -o "$LOCAL_BIN/ttyd"
-    chmod +x "$LOCAL_BIN/ttyd"
-    echo "ttyd installed."
-else
-    echo "ttyd already installed, skipping."
+    curl -fsSL -o /usr/local/bin/ttyd \
+        "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${TTYD_ARCH}"
+    chmod +x /usr/local/bin/ttyd
 fi
 
-# ---------------------------------------------------------------------------
-# 3. Install Caddy
-# ---------------------------------------------------------------------------
-
-if ! which caddy &>/dev/null; then
-    echo "Installing Caddy to $LOCAL_BIN..."
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-        x86_64)  CADDY_ARCH="amd64" ;;
-        aarch64) CADDY_ARCH="arm64" ;;
-        *)
-            echo "Error: unsupported architecture: $ARCH" >&2
-            exit 1
-            ;;
-    esac
-    CADDY_VERSION="2.9.1"
-    CADDY_URL="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${CADDY_ARCH}.tar.gz"
-    CADDY_TMP="$(mktemp -d)"
-    curl -fsSL "$CADDY_URL" -o "$CADDY_TMP/caddy.tar.gz"
-    tar -xzf "$CADDY_TMP/caddy.tar.gz" -C "$CADDY_TMP"
-    mv "$CADDY_TMP/caddy" "$LOCAL_BIN/caddy"
-    chmod +x "$LOCAL_BIN/caddy"
-    rm -rf "$CADDY_TMP"
-    echo "Caddy installed."
-else
-    echo "Caddy already installed, skipping."
+# Install Caddy
+if ! command -v caddy &>/dev/null; then
+    echo "==> Installing Caddy..."
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | \
+        gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | \
+        tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -qq
+    apt-get install -y caddy
 fi
 
-# ---------------------------------------------------------------------------
-# 4. Save config
-# ---------------------------------------------------------------------------
+# Generate password hash for Caddy basic auth
+HASHED_PASSWORD=$(caddy hash-password --plaintext "$PASSWORD")
 
-mkdir -p "$SCRIPT_DIR/config"
-echo "$FLUTTER_PROJECT" > "$SCRIPT_DIR/config/.flutter-project"
-echo "$DOMAIN"          > "$SCRIPT_DIR/config/.domain"
-chmod 600 "$SCRIPT_DIR/config/.flutter-project" "$SCRIPT_DIR/config/.domain"
-echo "Config saved."
+# ============================================================
+# Save config
+# ============================================================
+mkdir -p "${SCRIPT_DIR}/config"
+echo "$FLUTTER_PROJECT" > "${SCRIPT_DIR}/config/.flutter-project"
+echo "$DOMAIN"          > "${SCRIPT_DIR}/config/.domain"
+echo "$HASHED_PASSWORD" > "${SCRIPT_DIR}/config/.password_hash"
+echo "$NTFY_TOPIC"      > "${SCRIPT_DIR}/config/.ntfy_topic"
+chmod 600 \
+    "${SCRIPT_DIR}/config/.flutter-project" \
+    "${SCRIPT_DIR}/config/.domain" \
+    "${SCRIPT_DIR}/config/.password_hash" \
+    "${SCRIPT_DIR}/config/.ntfy_topic"
 
-# ---------------------------------------------------------------------------
-# 5. Write Caddyfile
-# ---------------------------------------------------------------------------
+# Make scripts executable
+chmod +x "${SCRIPT_DIR}/scripts/"*.sh
 
-sed \
-    -e "s|{{DOMAIN}}|${DOMAIN}|g" \
-    -e "s|{{APP_DIR}}|${SCRIPT_DIR}|g" \
-    -e "s|{{SCHEME}}|${SCHEME}|g" \
-    -e "s|{{PORT}}|${PORT}|g" \
-    -e "s|{{TLS_DIRECTIVE}}|${TLS_DIRECTIVE}|g" \
-    "$SCRIPT_DIR/Caddyfile.template" > "$SCRIPT_DIR/Caddyfile"
-
-echo "Caddyfile written to $SCRIPT_DIR/Caddyfile"
-
-# ---------------------------------------------------------------------------
-# 6. Create user systemd services
-# ---------------------------------------------------------------------------
-
-SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-mkdir -p "$SYSTEMD_USER_DIR"
-
-cat > "$SYSTEMD_USER_DIR/claude-ttyd.service" <<EOF
+# ============================================================
+# Systemd service: ttyd (Claude Code web terminal)
+# ============================================================
+cat > /etc/systemd/system/claude-ttyd.service << EOF
 [Unit]
 Description=ttyd web terminal for Claude Code
 After=network.target
 
 [Service]
-ExecStart=${LOCAL_BIN}/ttyd -p 7681 -W /bin/bash -l -c "cd ${FLUTTER_PROJECT} && exec bash"
+ExecStart=/usr/local/bin/ttyd -p 7681 -W /bin/bash -l -c "cd ${FLUTTER_PROJECT} && exec bash"
 Environment=TERM=xterm-256color
 Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOF
 
-echo "claude-ttyd service created."
-
-cat > "$SYSTEMD_USER_DIR/flutter-dev.service" <<EOF
+# ============================================================
+# Systemd service: Flutter dev server
+# ============================================================
+cat > /etc/systemd/system/flutter-dev.service << EOF
 [Unit]
 Description=Flutter web dev server
 After=network.target
@@ -185,12 +131,13 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOF
 
-echo "flutter-dev service created."
-
-cat > "$SYSTEMD_USER_DIR/flutterly-server.service" <<EOF
+# ============================================================
+# Systemd service: Node.js config/API server
+# ============================================================
+cat > /etc/systemd/system/flutterly-server.service << EOF
 [Unit]
 Description=Flutterly Node.js config server
 After=network.target
@@ -202,67 +149,91 @@ Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOF
 
-echo "flutterly-server service created."
+# ============================================================
+# Caddyfile (automatic HTTPS via Let's Encrypt)
+# ============================================================
+cat > /etc/caddy/Caddyfile << EOF
+${DOMAIN} {
+    basicauth * {
+        ${USERNAME} ${HASHED_PASSWORD}
+    }
 
-cat > "$SYSTEMD_USER_DIR/caddy.service" <<EOF
-[Unit]
-Description=Caddy web server
-After=network.target
+    # Node.js server (split-view UI + Bedrock config endpoints)
+    handle / {
+        reverse_proxy localhost:7600
+    }
 
-[Service]
-ExecStart=${LOCAL_BIN}/caddy run --config ${SCRIPT_DIR}/Caddyfile --adapter caddyfile
-ExecReload=${LOCAL_BIN}/caddy reload --config ${SCRIPT_DIR}/Caddyfile --adapter caddyfile
-WorkingDirectory=${SCRIPT_DIR}
-Restart=always
-RestartSec=3
+    handle /check-bedrock {
+        reverse_proxy localhost:7600
+    }
 
-[Install]
-WantedBy=default.target
+    handle /configure-bedrock {
+        reverse_proxy localhost:7600
+    }
+
+    # ttyd web terminal (WebSocket)
+    handle /terminal/* {
+        uri strip_prefix /terminal
+        reverse_proxy localhost:7681 {
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
+        }
+    }
+
+    # Flutter web preview
+    handle /preview/* {
+        uri strip_prefix /preview
+        reverse_proxy localhost:8080 {
+            header_up Host "localhost:8080"
+        }
+    }
+}
 EOF
 
-echo "caddy service created."
+# ============================================================
+# Convenience aliases
+# ============================================================
+cat > /etc/profile.d/flutterly.sh << EOF
+export FLUTTERLY_ROOT="${SCRIPT_DIR}"
+alias flutterly-logs='journalctl -u claude-ttyd -u flutter-dev -u flutterly-server -f'
+alias flutterly-restart='systemctl restart claude-ttyd flutter-dev flutterly-server caddy'
+alias flutterly-status='systemctl status claude-ttyd flutter-dev flutterly-server caddy'
+EOF
 
-# ---------------------------------------------------------------------------
-# 7. Enable linger (services persist after logout)
-# ---------------------------------------------------------------------------
-
-if loginctl enable-linger "$USER" 2>/dev/null; then
-    echo "Linger enabled — services will survive logout."
-else
-    echo "Warning: could not enable linger. Services may stop when you log out."
-    echo "  To fix: ask an admin to run: sudo loginctl enable-linger $USER"
-fi
-
-# ---------------------------------------------------------------------------
-# 8. Start everything
-# ---------------------------------------------------------------------------
-
-echo "Enabling and starting services..."
-systemctl --user daemon-reload
-systemctl --user enable --now claude-ttyd flutter-dev flutterly-server caddy
-
-# ---------------------------------------------------------------------------
-# 9. Print success
-# ---------------------------------------------------------------------------
+# Enable and start services
+systemctl daemon-reload
+systemctl enable --now claude-ttyd flutter-dev flutterly-server
+systemctl enable --now caddy
 
 echo ""
-echo "Setup complete!"
+echo "============================================================"
+echo "  Flutterly setup complete!"
+echo "============================================================"
 echo ""
-echo "  App URL: ${SCHEME}://${DOMAIN}:${PORT}/"
-if $ENABLE_HTTPS; then
-    echo ""
-    echo "  Note: using self-signed TLS (Caddy internal CA)."
-    echo "  Your browser will show a security warning on first visit — click"
-    echo "  'Advanced' and proceed to accept the certificate."
-fi
+echo "  URL:      https://${DOMAIN}/"
+echo "  Username: ${USERNAME}"
+echo "  Password: (the one you provided)"
 echo ""
-echo "Services running (user-level systemd):"
-echo "  claude-ttyd      (web terminal on :7681)"
-echo "  flutter-dev      (Flutter preview on :8080)"
-echo "  flutterly-server (config API on :7600)"
-echo "  caddy            (${SCHEME} reverse proxy on :${PORT})"
+echo "  ntfy topic:  ${NTFY_TOPIC}"
+echo "  Subscribe:   https://ntfy.sh/${NTFY_TOPIC}"
 echo ""
-echo "Visit ${SCHEME}://${DOMAIN}:${PORT}/ and enter your AWS Bearer Token on first visit."
+echo "  Services running:"
+echo "    claude-ttyd      (web terminal on :7681)"
+echo "    flutter-dev      (Flutter preview on :8080)"
+echo "    flutterly-server (config API on :7600)"
+echo "    caddy            (HTTPS reverse proxy on :443)"
+echo ""
+echo "  NEXT STEPS:"
+echo ""
+echo "  1. Open https://${DOMAIN}/ in your browser"
+echo "  2. Log in with username '${USERNAME}' and your password"
+echo "  3. Enter your AWS Bearer Token when prompted"
+echo "  4. Type 'claude' in the terminal to start Claude Code"
+echo ""
+echo "  Reload your shell for aliases:"
+echo "    source /etc/profile.d/flutterly.sh"
+echo ""
+echo "============================================================"
