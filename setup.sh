@@ -192,6 +192,11 @@ EOF
 # Caddyfile (automatic HTTPS via Let's Encrypt)
 # ============================================================
 cat > /etc/caddy/Caddyfile << EOF
+# Redirect HTTP to HTTPS (also satisfies Let's Encrypt HTTP-01 challenge)
+http://${DOMAIN} {
+    redir https://{host}{uri} permanent
+}
+
 ${DOMAIN} {
     # Node.js server (split-view UI + Bedrock config endpoints)
     handle / {
