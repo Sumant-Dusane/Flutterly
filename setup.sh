@@ -64,6 +64,9 @@ if ! command -v flutter &>/dev/null; then
     curl -fsSL "$FLUTTER_URL" -o /tmp/flutter.tar.xz
     tar -xf /tmp/flutter.tar.xz -C /opt/
     rm /tmp/flutter.tar.xz
+    chown -R root:root /opt/flutter
+    chmod -R 755 /opt/flutter
+    mkdir -p /opt/flutter/bin/cache
     export PATH="/opt/flutter/bin:$PATH"
     echo "==> Pre-downloading Flutter web artifacts..."
     /opt/flutter/bin/flutter precache --web
