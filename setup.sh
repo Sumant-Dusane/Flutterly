@@ -217,6 +217,7 @@ ${DOMAIN} {
         reverse_proxy localhost:7681 {
             header_up Connection {>Connection}
             header_up Upgrade {>Upgrade}
+            header_up Origin "http://localhost:7681"
         }
     }
 
@@ -225,6 +226,8 @@ ${DOMAIN} {
         uri strip_prefix /preview
         reverse_proxy localhost:8080 {
             header_up Host "localhost:8080"
+            header_up Connection {>Connection}
+            header_up Upgrade {>Upgrade}
         }
     }
 }

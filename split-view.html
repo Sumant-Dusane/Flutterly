@@ -222,19 +222,17 @@
     document.body.style.cursor = '';
   });
 
-  // --- Flutter polling ---
+  // --- Flutter overlay ---
+  // Hide the overlay once the iframe has loaded and Flutter has had time to render.
   const overlay = document.getElementById('flutter-overlay');
+  const previewFrame = document.getElementById('preview-frame');
 
-  const pollFlutter = setInterval(function () {
-    fetch('/preview/', { method: 'GET' })
-      .then(function (res) {
-        if (res.ok) {
-          clearInterval(pollFlutter);
-          overlay.style.display = 'none';
-        }
-      })
-      .catch(function () { /* keep polling */ });
-  }, 2000);
+  previewFrame.addEventListener('load', function () {
+    // Give Flutter's JS a moment to paint after the HTML document loads.
+    setTimeout(function () {
+      overlay.style.display = 'none';
+    }, 2000);
+  });
 
   // --- Auth flow ---
   const backdrop = document.getElementById('modal-backdrop');
