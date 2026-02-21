@@ -1,5 +1,5 @@
-http://{{DOMAIN}}:7800 {
-
+{{SCHEME}}://{{DOMAIN}}:{{PORT}} {
+{{TLS_DIRECTIVE}}
     # Static files + config API (Node server)
     handle / {
         reverse_proxy localhost:7600

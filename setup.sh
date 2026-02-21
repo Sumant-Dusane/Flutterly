@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: bash setup.sh <domain> <flutter-project-path>
+# Usage: bash setup.sh <domain> <flutter-project-path> [--https]
 # No root/sudo required — installs binaries to ~/.local/bin and services to ~/.config/systemd/user/
+#
+# --https   Enable HTTPS via Caddy's internal CA on port 8443 (self-signed).
+#           Browser will warn on first visit; add an exception to proceed.
 
 # ---------------------------------------------------------------------------
 # 1. Validate inputs
 # ---------------------------------------------------------------------------
 
 if [ $# -lt 2 ]; then
-    echo "Usage: bash setup.sh <domain> <flutter-project-path>" >&2
+    echo "Usage: bash setup.sh <domain> <flutter-project-path> [--https]" >&2
     exit 1
 fi
 
 DOMAIN="$1"
 FLUTTER_PROJECT="$2"
+ENABLE_HTTPS=false
+for arg in "$@"; do
+    [ "$arg" = "--https" ] && ENABLE_HTTPS=true
+done
 
 if ! which flutter &>/dev/null; then
     echo "Error: flutter is not installed or not on PATH" >&2
@@ -38,9 +45,20 @@ FLUTTER_BIN="$(which flutter)"
 NODE_BIN="$(which node)"
 LOCAL_BIN="$HOME/.local/bin"
 
+if $ENABLE_HTTPS; then
+    SCHEME="https"
+    PORT="8443"
+    TLS_DIRECTIVE="    tls internal"
+else
+    SCHEME="http"
+    PORT="7800"
+    TLS_DIRECTIVE=""
+fi
+
 echo "Domain:          $DOMAIN"
 echo "Flutter project: $FLUTTER_PROJECT"
 echo "App directory:   $SCRIPT_DIR"
+echo "HTTPS:           $ENABLE_HTTPS (${SCHEME}://${DOMAIN}:${PORT}/)"
 
 mkdir -p "$LOCAL_BIN"
 export PATH="$LOCAL_BIN:$PATH"
@@ -113,7 +131,8 @@ fi
 
 mkdir -p "$SCRIPT_DIR/config"
 echo "$FLUTTER_PROJECT" > "$SCRIPT_DIR/config/.flutter-project"
-chmod 600 "$SCRIPT_DIR/config/.flutter-project"
+echo "$DOMAIN"          > "$SCRIPT_DIR/config/.domain"
+chmod 600 "$SCRIPT_DIR/config/.flutter-project" "$SCRIPT_DIR/config/.domain"
 echo "Config saved."
 
 # ---------------------------------------------------------------------------
@@ -123,6 +142,9 @@ echo "Config saved."
 sed \
     -e "s|{{DOMAIN}}|${DOMAIN}|g" \
     -e "s|{{APP_DIR}}|${SCRIPT_DIR}|g" \
+    -e "s|{{SCHEME}}|${SCHEME}|g" \
+    -e "s|{{PORT}}|${PORT}|g" \
+    -e "s|{{TLS_DIRECTIVE}}|${TLS_DIRECTIVE}|g" \
     "$SCRIPT_DIR/Caddyfile.template" > "$SCRIPT_DIR/Caddyfile"
 
 echo "Caddyfile written to $SCRIPT_DIR/Caddyfile"
@@ -229,12 +251,18 @@ systemctl --user enable --now claude-ttyd flutter-dev flutterly-server caddy
 echo ""
 echo "Setup complete!"
 echo ""
-echo "  App URL: http://${DOMAIN}:7800/"
+echo "  App URL: ${SCHEME}://${DOMAIN}:${PORT}/"
+if $ENABLE_HTTPS; then
+    echo ""
+    echo "  Note: using self-signed TLS (Caddy internal CA)."
+    echo "  Your browser will show a security warning on first visit — click"
+    echo "  'Advanced' and proceed to accept the certificate."
+fi
 echo ""
 echo "Services running (user-level systemd):"
 echo "  claude-ttyd      (web terminal on :7681)"
 echo "  flutter-dev      (Flutter preview on :8080)"
 echo "  flutterly-server (config API on :7600)"
-echo "  caddy            (HTTP reverse proxy on :7800)"
+echo "  caddy            (${SCHEME} reverse proxy on :${PORT})"
 echo ""
-echo "Visit http://${DOMAIN}:7800/ and enter your AWS Bearer Token on first visit."
+echo "Visit ${SCHEME}://${DOMAIN}:${PORT}/ and enter your AWS Bearer Token on first visit."
