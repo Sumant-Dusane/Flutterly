@@ -1,4 +1,4 @@
-{{DOMAIN}} {
+http://{{DOMAIN}}:7800 {
 
     # Static files + config API (Node server)
     handle / {
