@@ -7,16 +7,15 @@ set -euo pipefail
 # Run on a fresh Ubuntu 22.04+ VM with a public IP and
 # a domain name pointing to it (for automatic HTTPS).
 #
-# Usage: sudo bash setup.sh <domain> <password> <flutter-project-path> [--flutter-version=X.X.X]
-# Example: sudo bash setup.sh myapp.example.com mysecretpass /home/user/myapp --flutter-version=3.24.0
+# Usage: sudo bash setup.sh <domain> <flutter-project-path> [--flutter-version=X.X.X]
+# Example: sudo bash setup.sh myapp.example.com /home/user/myapp --flutter-version=3.24.0
 #
 # --flutter-version   Install Flutter at this version if not already on PATH.
 #                     Required only when flutter is not pre-installed.
 # ============================================================
 
-DOMAIN="${1:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
-PASSWORD="${2:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
-FLUTTER_PROJECT="${3:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
+DOMAIN="${1:?Usage: sudo bash setup.sh <domain> <flutter-project-path>}"
+FLUTTER_PROJECT="${2:?Usage: sudo bash setup.sh <domain> <flutter-project-path>}"
 
 FLUTTER_VERSION=""
 for arg in "$@"; do
@@ -24,9 +23,8 @@ for arg in "$@"; do
         FLUTTER_VERSION="${arg#--flutter-version=}"
     fi
 done
-USERNAME="claude"
-NTFY_TOPIC="flutterly-$(openssl rand -hex 4)"
 
+NTFY_TOPIC="flutterly-$(openssl rand -hex 4)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ ! -d "$FLUTTER_PROJECT" ]; then
@@ -68,6 +66,10 @@ if ! command -v flutter &>/dev/null; then
     chmod -R 755 /opt/flutter
     mkdir -p /opt/flutter/bin/cache
     export PATH="/opt/flutter/bin:$PATH"
+    # Persist to root's bashrc so it survives after script exits
+    if ! grep -q '/opt/flutter/bin' /root/.bashrc 2>/dev/null; then
+        echo 'export PATH="/opt/flutter/bin:$PATH"' >> /root/.bashrc
+    fi
     echo "==> Pre-downloading Flutter web artifacts..."
     /opt/flutter/bin/flutter precache --web
     echo "Flutter ${FLUTTER_VERSION} installed to /opt/flutter"
@@ -102,21 +104,16 @@ if ! command -v caddy &>/dev/null; then
     apt-get install -y caddy
 fi
 
-# Generate password hash for Caddy basic auth
-HASHED_PASSWORD=$(caddy hash-password --plaintext "$PASSWORD")
-
 # ============================================================
 # Save config
 # ============================================================
 mkdir -p "${SCRIPT_DIR}/config"
 echo "$FLUTTER_PROJECT" > "${SCRIPT_DIR}/config/.flutter-project"
 echo "$DOMAIN"          > "${SCRIPT_DIR}/config/.domain"
-echo "$HASHED_PASSWORD" > "${SCRIPT_DIR}/config/.password_hash"
 echo "$NTFY_TOPIC"      > "${SCRIPT_DIR}/config/.ntfy_topic"
 chmod 600 \
     "${SCRIPT_DIR}/config/.flutter-project" \
     "${SCRIPT_DIR}/config/.domain" \
-    "${SCRIPT_DIR}/config/.password_hash" \
     "${SCRIPT_DIR}/config/.ntfy_topic"
 
 # Make scripts executable
@@ -181,10 +178,6 @@ EOF
 # ============================================================
 cat > /etc/caddy/Caddyfile << EOF
 ${DOMAIN} {
-    basicauth * {
-        ${USERNAME} ${HASHED_PASSWORD}
-    }
-
     # Node.js server (split-view UI + Bedrock config endpoints)
     handle / {
         reverse_proxy localhost:7600
@@ -233,35 +226,70 @@ alias flutterly-restart='systemctl restart claude-ttyd flutter-dev flutterly-ser
 alias flutterly-status='systemctl status claude-ttyd flutter-dev flutterly-server caddy'
 EOF
 
+# ============================================================
 # Enable and start services
+# ============================================================
 systemctl daemon-reload
 systemctl enable --now claude-ttyd flutter-dev flutterly-server
+
+set +e
 systemctl enable --now caddy
+CADDY_EXIT=$?
+set -e
+
+if [ $CADDY_EXIT -ne 0 ]; then
+    echo ""
+    echo "============================================================"
+    echo "  WARNING: Caddy failed to start."
+    echo "============================================================"
+    BLOCKER=$(ss -tlnp 2>/dev/null | grep -E ':443 ' | awk '{print $NF}' | grep -oP 'users:\(\("\K[^"]+' || true)
+    if [ -n "$BLOCKER" ]; then
+        echo ""
+        echo "  Port 443 is already in use by: ${BLOCKER}"
+        echo ""
+        echo "  To free the port, stop the conflicting service:"
+        echo "    systemctl stop ${BLOCKER}"
+        echo "    systemctl disable ${BLOCKER}  # optional: prevent it from restarting"
+        echo ""
+        echo "  Then start Caddy:"
+        echo "    systemctl start caddy"
+    else
+        echo ""
+        echo "  Could not identify what is using port 443."
+        echo "  Check with: ss -tlnp | grep ':443'"
+        echo "  Then run:   systemctl start caddy"
+    fi
+    echo ""
+    echo "  Full Caddy logs: journalctl -u caddy -n 30"
+    echo "============================================================"
+    echo ""
+fi
 
 echo ""
 echo "============================================================"
 echo "  Flutterly setup complete!"
 echo "============================================================"
 echo ""
-echo "  URL:      https://${DOMAIN}/"
-echo "  Username: ${USERNAME}"
-echo "  Password: (the one you provided)"
+echo "  URL:     https://${DOMAIN}/"
 echo ""
 echo "  ntfy topic:  ${NTFY_TOPIC}"
 echo "  Subscribe:   https://ntfy.sh/${NTFY_TOPIC}"
 echo ""
-echo "  Services running:"
+echo "  Services:"
 echo "    claude-ttyd      (web terminal on :7681)"
 echo "    flutter-dev      (Flutter preview on :8080)"
 echo "    flutterly-server (config API on :7600)"
+if [ $CADDY_EXIT -eq 0 ]; then
 echo "    caddy            (HTTPS reverse proxy on :443)"
+else
+echo "    caddy            (NOT RUNNING — see warning above)"
+fi
 echo ""
 echo "  NEXT STEPS:"
 echo ""
 echo "  1. Open https://${DOMAIN}/ in your browser"
-echo "  2. Log in with username '${USERNAME}' and your password"
-echo "  3. Enter your AWS Bearer Token when prompted"
-echo "  4. Type 'claude' in the terminal to start Claude Code"
+echo "  2. Enter your AWS Bearer Token when prompted"
+echo "  3. Type 'claude' in the terminal to start Claude Code"
 echo ""
 echo "  Reload your shell for aliases:"
 echo "    source /etc/profile.d/flutterly.sh"
