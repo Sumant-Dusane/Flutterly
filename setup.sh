@@ -27,6 +27,10 @@ done
 NTFY_TOPIC="flutterly-$(openssl rand -hex 4)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Extend PATH to include common flutter install locations so commands like
+# `command -v flutter` work even under sudo's restricted secure_path.
+export PATH="/opt/flutter/bin:/usr/local/bin:$PATH"
+
 if [ ! -d "$FLUTTER_PROJECT" ]; then
     echo "Error: Flutter project directory '$FLUTTER_PROJECT' not found" >&2
     exit 1
@@ -65,7 +69,9 @@ if ! command -v flutter &>/dev/null; then
     chown -R root:root /opt/flutter
     chmod -R 755 /opt/flutter
     mkdir -p /opt/flutter/bin/cache
-    export PATH="/opt/flutter/bin:$PATH"
+    chmod -R 777 /opt/flutter/bin/cache
+    # Symlink into /usr/local/bin so flutter is reachable via sudo's secure_path
+    ln -sf /opt/flutter/bin/flutter /usr/local/bin/flutter
     # Persist to root's bashrc so it survives after script exits
     if ! grep -q '/opt/flutter/bin' /root/.bashrc 2>/dev/null; then
         echo 'export PATH="/opt/flutter/bin:$PATH"' >> /root/.bashrc
@@ -74,6 +80,15 @@ if ! command -v flutter &>/dev/null; then
     /opt/flutter/bin/flutter precache --web
     echo "Flutter ${FLUTTER_VERSION} installed to /opt/flutter"
 fi
+# Ensure flutter cache is writable by all users (fixes permission denied on engine.stamp)
+if [ -d "/opt/flutter/bin/cache" ]; then
+    chmod -R 777 /opt/flutter/bin/cache
+fi
+# Ensure flutter is reachable via sudo's secure_path
+if [ -f "/opt/flutter/bin/flutter" ] && [ ! -L "/usr/local/bin/flutter" ]; then
+    ln -sf /opt/flutter/bin/flutter /usr/local/bin/flutter
+fi
+
 FLUTTER_BIN="$(which flutter)"
 NODE_BIN="$(which node)"
 
