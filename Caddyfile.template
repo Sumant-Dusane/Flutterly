@@ -25,6 +25,8 @@
     # Flutter web preview
     handle /preview/* {
         uri strip_prefix /preview
-        reverse_proxy localhost:8080
+        reverse_proxy localhost:8080 {
+            header_up Host "localhost:8080"
+        }
     }
 }
