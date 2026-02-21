@@ -7,13 +7,23 @@ set -euo pipefail
 # Run on a fresh Ubuntu 22.04+ VM with a public IP and
 # a domain name pointing to it (for automatic HTTPS).
 #
-# Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>
-# Example: sudo bash setup.sh myapp.example.com mysecretpass /home/user/myapp
+# Usage: sudo bash setup.sh <domain> <password> <flutter-project-path> [--flutter-version=X.X.X]
+# Example: sudo bash setup.sh myapp.example.com mysecretpass /home/user/myapp --flutter-version=3.24.0
+#
+# --flutter-version   Install Flutter at this version if not already on PATH.
+#                     Required only when flutter is not pre-installed.
 # ============================================================
 
 DOMAIN="${1:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
 PASSWORD="${2:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
 FLUTTER_PROJECT="${3:?Usage: sudo bash setup.sh <domain> <password> <flutter-project-path>}"
+
+FLUTTER_VERSION=""
+for arg in "$@"; do
+    if [[ "$arg" == --flutter-version=* ]]; then
+        FLUTTER_VERSION="${arg#--flutter-version=}"
+    fi
+done
 USERNAME="claude"
 NTFY_TOPIC="flutterly-$(openssl rand -hex 4)"
 
@@ -27,7 +37,7 @@ FLUTTER_PROJECT="$(realpath "$FLUTTER_PROJECT")"
 
 echo "==> Installing system dependencies..."
 apt-get update -qq
-apt-get install -y curl git jq openssl
+apt-get install -y curl git jq openssl xz-utils
 
 # Install Node.js
 if ! command -v node &>/dev/null; then
@@ -42,11 +52,22 @@ if ! command -v claude &>/dev/null; then
     npm install -g @anthropic-ai/claude-code
 fi
 
-# Validate Flutter
+# Install or validate Flutter
 if ! command -v flutter &>/dev/null; then
-    echo "Error: flutter is not installed or not on PATH" >&2
-    echo "  Install Flutter SDK first: https://docs.flutter.dev/get-started/install/linux" >&2
-    exit 1
+    if [ -z "$FLUTTER_VERSION" ]; then
+        echo "Error: flutter is not installed and --flutter-version was not specified." >&2
+        echo "  Re-run with: sudo bash setup.sh ... --flutter-version=3.24.0" >&2
+        exit 1
+    fi
+    echo "==> Installing Flutter ${FLUTTER_VERSION}..."
+    FLUTTER_URL="https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
+    curl -fsSL "$FLUTTER_URL" -o /tmp/flutter.tar.xz
+    tar -xf /tmp/flutter.tar.xz -C /opt/
+    rm /tmp/flutter.tar.xz
+    export PATH="/opt/flutter/bin:$PATH"
+    echo "==> Pre-downloading Flutter web artifacts..."
+    /opt/flutter/bin/flutter precache --web
+    echo "Flutter ${FLUTTER_VERSION} installed to /opt/flutter"
 fi
 FLUTTER_BIN="$(which flutter)"
 NODE_BIN="$(which node)"
@@ -196,8 +217,14 @@ EOF
 # ============================================================
 # Convenience aliases
 # ============================================================
+FLUTTER_PATH_LINE=""
+if [ -d "/opt/flutter/bin" ]; then
+    FLUTTER_PATH_LINE='export PATH="/opt/flutter/bin:$PATH"'
+fi
+
 cat > /etc/profile.d/flutterly.sh << EOF
 export FLUTTERLY_ROOT="${SCRIPT_DIR}"
+${FLUTTER_PATH_LINE}
 alias flutterly-logs='journalctl -u claude-ttyd -u flutter-dev -u flutterly-server -f'
 alias flutterly-restart='systemctl restart claude-ttyd flutter-dev flutterly-server caddy'
 alias flutterly-status='systemctl status claude-ttyd flutter-dev flutterly-server caddy'
